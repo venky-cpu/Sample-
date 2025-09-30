@@ -1,0 +1,26 @@
+Step 1: Go to URL "https://your-url-here.com"
+
+Step 2: Enter "user" into "User" input field
+Step 3: Enter "password" into "Password" input field
+Step 4: Click "Enter" button to login
+
+Step 5: Click "Monitoring"
+Step 6: Click "Alert"
+Step 7: Click "Rules"
+
+Step 8: Click "Add New" button
+Step 9: In popup, click "Direction Income" button
+Step 10: Enter "Sample" into "Label" input field
+Step 11: Select "Critical Very Low" radio button
+Step 12: Enter "This is the sample instruction" into "Instruction" input field
+
+Step 13: Status Section
+  - Click "Equal" button
+  - Open "Status" dropdown → Select "Control"
+
+Step 14: Threshold Section
+  - Click "Greater Than" button
+  - Enter "1" into "Threshold" input field
+  - Click "Submit" button
+
+Step 15: Stop
