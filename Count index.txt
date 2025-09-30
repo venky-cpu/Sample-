@@ -1,0 +1,27 @@
+def extract_chars(text, index, next_chars=10):
+    """
+    Extracts the character at the given index and the next `next_chars` characters.
+
+    :param text: str, input text
+    :param index: int, the index to start from
+    :param next_chars: int, number of characters to extract after index
+    :return: str, extracted substring
+    """
+    if index < 0 or index >= len(text):
+        return "Index out of range"
+    
+    # Extract the character at index and next `next_chars` characters
+    end_index = min(index + next_chars + 1, len(text))  # +1 to include the character at index
+    return text[index:end_index]
+
+# Example usage
+large_text = """Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
+Vestibulum consequat, orci ac laoreet cursus, dolor sem luctus lorem, eget consequat magna felis a magna. 
+Aliquam scelerisque condimentum ante, eget facilisis tortor lobortis in. 
+In interdum venenatis justo eget consequat. Morbi commodo sodales nisi id sodales."""
+
+# Input index
+idx = 300
+
+result = extract_chars(large_text, idx)
+print(f"Character at index {idx} and next 10 characters:\n{result}")
