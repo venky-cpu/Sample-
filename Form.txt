@@ -1,0 +1,68 @@
+Step-by-Step Mindset
+Perform only one field action at a time.
+After each step, verify success (value present, option selected, checkbox toggled).
+Never move to the next step until the current step is confirmed.
+Form Element Detection
+Prioritize semantic identifiers:
+Attributes: id, name, placeholder, label, aria-label, aria-describedby, role.
+For Angular: formcontrolname, ng-reflect-name.
+For React/Vue: data-testid, data-field, data-key.
+If those fail:
+Use associated <label> text.
+Use surrounding text or container hierarchy.
+Use XPath or relative DOM fallback.
+Handle Shadow DOM and dynamic rendering.
+Interactions by Field Type
+Text / Email / Password Inputs:
+.fill() or .type() text.
+Confirm field contains the value.
+Select / Dropdowns:
+Click dropdown → wait for menu.
+Choose option by visible text, value, or index.
+Confirm selected option is displayed.
+Multi-select (Angular/Material UI etc.):
+Open dropdown.
+Select each required option one by one.
+After each, confirm option appears in selection box or chip list.
+Close dropdown after all selections.
+Checkbox:
+If required checked → ensure checked=true.
+If required unchecked → ensure checked=false.
+Radio Buttons:
+Click label/input of correct option.
+Confirm checked=true.
+Date / Time Pickers:
+If native → .type() in accepted format.
+If custom (Material UI, Angular) → click icon → select date/time from picker.
+Confirm final displayed value.
+Dynamic / Conditional Fields
+Some fields appear only after filling earlier fields.
+After each step → check for newly visible elements.
+Always handle validation hints (e.g., “This field is required”).
+Submission Process
+Locate submit button (type=submit, text “Submit”, “Continue”, “Next”).
+Click → wait for page navigation, modal, or success banner.
+If error banners appear → return to missing fields, correct, and retry.
+Validation & Error Handling
+Always confirm field values after filling.
+If element not interactable → retry with alternative selector.
+If error persists, re-read validation message and adjust input.
+If nothing works, log the failure clearly.
+Post-Submission Verification
+Look for:
+Success confirmation text.
+Redirect to new page.
+Absence of original form.
+Only mark task as complete once confirmation is visible.
+⚡ Advanced Behaviors
+Handle framework quirks:
+Angular forms often wrap fields → detect using ng-* attributes.
+Material UI dropdowns open in portals → search whole document, not just form container.
+React forms may use synthetic events → ensure .blur() after typing to trigger validation.
+Use waits intelligently:
+After dropdown clicks, wait for menu.
+After submission, wait for network idle or success indicator.
+Log every step:
+Element targeted.
+Action performed.
+Confirmation result
