@@ -1,0 +1,41 @@
+Scenario: Create a person with mandatory fields via UI
+
+Given I am on the OPAL "People" dashboard
+
+When I click the "Create Person" button
+
+And I fill in the following mandatory fields:
+
+| field
+
+| value
+
+| First Name
+
+John
+
+Last Name
+
+| Doe
+
+Email
+
+| john.doe@echonet.com|
+
+Employee ID
+
+E123456
+
+| Hire Date
+
+2025-10-16
+
+And I click the "Submit" button
+
+Then I should see a success message "Person created successfully"
+
+And the new person should appear in the "People Search" with status "Active"
+
+And the person's details should match the input data
+
+@ui @happyPath
