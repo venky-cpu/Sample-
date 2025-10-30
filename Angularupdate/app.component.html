@@ -1,0 +1,21 @@
+<main class="p-6 max-w-5xl mx-auto">
+  <mat-card class="p-4 mb-4">
+    <h1 class="text-2xl font-semibold mb-2">{{title}}</h1>
+    <p class="text-sm text-gray-600">Upload KT, run tests, and view live logs.</p>
+  </mat-card>
+
+  <mat-card class="p-4 mb-4">
+    <div class="flex gap-3 items-center">
+      <input type="file" (change)="onFileChange($event)" />
+      <button mat-raised-button color="primary" (click)="uploadKT()">Upload KT</button>
+      <button mat-raised-button color="accent" (click)="runTests()">Start Tests</button>
+      <button mat-button (click)="startPolling()">Start Poll</button>
+      <button mat-button (click)="stopPolling()">Stop Poll</button>
+    </div>
+  </mat-card>
+
+  <mat-card class="p-4">
+    <h2 class="font-medium mb-2">Status</h2>
+    <pre class="bg-gray-100 p-3 rounded">{{ status() | json }}</pre>
+  </mat-card>
+</main>
