@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+playwright==1.48.0
+openai
+chromadb
+pydantic
+python-dotenv
+httpx
