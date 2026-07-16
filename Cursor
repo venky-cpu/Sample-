@@ -1,0 +1,258 @@
+# Elasticsearch `search_after` Pagination — Production Implementation
+
+## The Flow
+
+```
+Client → Controller → Service → ES Repository/Client
+                                      ↓
+                          PIT (Point-in-Time) created
+                                      ↓
+                          First query (no search_after)
+                                      ↓
+                          Return hits + last sort values (cursor)
+                                      ↓
+Client sends cursor back → Next query with search_after = cursor
+                                      ↓
+                          Repeat until hits.size < pageSize
+                                      ↓
+                          Close PIT
+```
+
+**Why `search_after` over `from/size`:** `from/size` degrades badly past ~10k docs (the `index.max_result_window` limit) because every shard must load and sort `from + size` docs. `search_after` is stateless deep pagination — constant cost per page. Pair it with a **PIT (Point-in-Time)** to get a consistent snapshot so concurrent writes don't cause missed/duplicate docs.
+
+---
+
+## Non-Negotiable Rules (what separates senior code)
+
+1. **Always include a tiebreaker in the sort** — a unique field (e.g. `_id` or a `_seq_no`/`_shard_doc`). Without it, docs with equal sort values get skipped or duplicated across pages.
+2. **Use PIT for consistency** across pages; the cursor alone isn't enough under concurrent indexing.
+3. **The cursor is opaque to the client** — Base64-encode the sort values + PIT id. Don't leak internal schema.
+4. **Never trust page size from the client blindly** — clamp it.
+5. **Close the PIT** (explicitly or via a keep-alive TTL).
+
+---
+
+## Implementation
+
+### 1. Cursor model (opaque, self-contained)
+
+```java
+public record SearchCursor(String pitId, List<Object> sortValues) {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public String encode() {
+        try {
+            byte[] json = MAPPER.writeValueAsBytes(this);
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(json);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to encode cursor", e);
+        }
+    }
+
+    public static SearchCursor decode(String encoded) {
+        try {
+            byte[] json = Base64.getUrlDecoder().decode(encoded);
+            return MAPPER.readValue(json, SearchCursor.class);
+        } catch (Exception e) {
+            throw new InvalidCursorException("Malformed pagination cursor");
+        }
+    }
+}
+```
+
+### 2. Response wrapper
+
+```java
+public record PagedResult<T>(
+        List<T> items,
+        String nextCursor,   // null when exhausted
+        boolean hasMore
+) {}
+```
+
+### 3. Request DTO with validation
+
+```java
+public record SearchRequest(
+        String query,
+
+        @Min(1) @Max(100)
+        int pageSize,
+
+        String cursor        // null on first page
+) {
+    public SearchRequest {
+        if (pageSize == 0) pageSize = 20; // sane default
+    }
+}
+```
+
+### 4. Service — the core logic (using the new Java `ElasticsearchClient` 8.x)
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ProductSearchService {
+
+    private final ElasticsearchClient esClient;
+
+    private static final String INDEX = "products";
+    private static final Time PIT_KEEP_ALIVE = Time.of(t -> t.time("2m"));
+
+    public PagedResult<Product> search(SearchRequest req) throws IOException {
+
+        // 1. Resolve PIT: reuse from cursor, or open a fresh one
+        String pitId = (req.cursor() != null)
+                ? SearchCursor.decode(req.cursor()).pitId()
+                : openPit();
+
+        List<Object> searchAfter = (req.cursor() != null)
+                ? SearchCursor.decode(req.cursor()).sortValues()
+                : null;
+
+        // 2. Build the query
+        SearchRequest.Builder<Product> builder = new co.elastic.clients.elasticsearch.core
+                .SearchRequest.Builder();
+
+        var esRequest = co.elastic.clients.elasticsearch.core.SearchRequest.of(s -> {
+            s.pit(p -> p.id(pitId).keepAlive(PIT_KEEP_ALIVE))
+             .size(req.pageSize())
+             .query(q -> buildQuery(q, req.query()))
+             // deterministic sort + tiebreaker — CRITICAL
+             .sort(so -> so.field(f -> f.field("createdAt").order(SortOrder.Desc)))
+             .sort(so -> so.field(f -> f.field("_id").order(SortOrder.Asc)));
+
+            if (searchAfter != null && !searchAfter.isEmpty()) {
+                s.searchAfter(searchAfter.stream()
+                        .map(v -> FieldValue.of(v.toString()))
+                        .toList());
+            }
+            return s;
+        });
+
+        // 3. Execute
+        SearchResponse<Product> resp = esClient.search(esRequest, Product.class);
+        List<Hit<Product>> hits = resp.hits().hits();
+
+        // 4. Build the response
+        List<Product> items = hits.stream()
+                .map(Hit::source)
+                .toList();
+
+        boolean hasMore = hits.size() == req.pageSize();
+        String nextCursor = null;
+
+        if (hasMore) {
+            List<Object> lastSort = hits.get(hits.size() - 1).sort().stream()
+                    .map(FieldValue::_get)
+                    .toList();
+            // PIT id can change; use the one ES returns
+            nextCursor = new SearchCursor(resp.pitId(), lastSort).encode();
+        } else {
+            closePit(pitId); // exhausted — clean up
+        }
+
+        return new PagedResult<>(items, nextCursor, hasMore);
+    }
+
+    private ObjectBuilder<Query> buildQuery(Query.Builder q, String text) {
+        if (text == null || text.isBlank()) {
+            return q.matchAll(m -> m);
+        }
+        return q.multiMatch(m -> m
+                .query(text)
+                .fields("name^3", "description", "tags"));
+    }
+
+    private String openPit() throws IOException {
+        return esClient.openPointInTime(p -> p
+                .index(INDEX)
+                .keepAlive(PIT_KEEP_ALIVE)).id();
+    }
+
+    private void closePit(String pitId) {
+        try {
+            esClient.closePointInTime(c -> c.id(pitId));
+        } catch (IOException e) {
+            log.warn("Failed to close PIT {}, will expire via keepAlive", pitId, e);
+        }
+    }
+}
+```
+
+### 5. Controller
+
+```java
+@RestController
+@RequestMapping("/api/v1/products")
+@RequiredArgsConstructor
+public class ProductSearchController {
+
+    private final ProductSearchService searchService;
+
+    @GetMapping("/search")
+    public PagedResult<Product> search(
+            @RequestParam(required = false) String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
+            @RequestParam(required = false) String cursor) throws IOException {
+
+        return searchService.search(new SearchRequest(query, pageSize, cursor));
+    }
+}
+```
+
+### 6. Exception handling
+
+```java
+@RestControllerAdvice
+public class SearchExceptionHandler {
+
+    @ExceptionHandler(InvalidCursorException.class)
+    public ResponseEntity<ApiError> handleBadCursor(InvalidCursorException e) {
+        return ResponseEntity.badRequest()
+                .body(new ApiError("INVALID_CURSOR", e.getMessage()));
+    }
+
+    @ExceptionHandler(ElasticsearchException.class)
+    public ResponseEntity<ApiError> handleEs(ElasticsearchException e) {
+        // PIT expired → 410 Gone tells client to restart from page 1
+        if (e.getMessage() != null && e.getMessage().contains("search_context_missing")) {
+            return ResponseEntity.status(HttpStatus.GONE)
+                    .body(new ApiError("CURSOR_EXPIRED", "Restart pagination"));
+        }
+        throw e;
+    }
+}
+```
+
+---
+
+## Client Contract
+
+```
+GET /api/v1/products/search?query=laptop&pageSize=20
+→ { items: [...], nextCursor: "eyJwaXRJZCI...", hasMore: true }
+
+GET /api/v1/products/search?query=laptop&pageSize=20&cursor=eyJwaXRJZCI...
+→ { items: [...], nextCursor: "eyJ...", hasMore: true }
+
+... until hasMore: false, nextCursor: null
+```
+
+---
+
+## Design Decisions a Reviewer Will Ask About
+
+**PIT vs no PIT:** If your index is read-mostly (immutable logs, product catalog updated nightly), you can skip PIT and use plain `search_after` on a stable sort — simpler, no cleanup. Use PIT when consistency across pages under live writes matters.
+
+**PIT lifecycle in cursors:** The PIT id lives in the cursor. Downside — a slow client holding an old cursor pins ES resources until keepAlive expires. Keep TTL short (1–2 min per page). For very long sessions, consider stateless `search_after` without PIT and accept eventual-consistency drift.
+
+**Tiebreaker choice:** `_id` works everywhere. For max performance ES recommends the implicit `_shard_doc` tiebreaker (only valid inside a PIT), which avoids loading `_id` field data.
+
+**No total count:** `search_after` deliberately doesn't give you a total. Don't compute it — that defeats the purpose. Use `hasMore` for "next page" UX, not page numbers.
+
+**Cursor tampering:** Base64 is encoding, not security. If cursors must be tamper-proof (e.g. they encode a user-scoped filter), sign them (HMAC) or store server-side and hand out a random token.
+
+Want me to adapt this for the Spring Data `ElasticsearchRepository`/`ElasticsearchOperations` abstraction instead of the low-level client, or add reactive (WebFlux) support?
